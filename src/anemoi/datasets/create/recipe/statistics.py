@@ -25,6 +25,8 @@ class Statistics(BaseModel):
     start: str | int | datetime.datetime | None = None
     end: str | int | datetime.datetime | None = None
     tendencies: list[str, int] | bool | None = Field(default=True)
+    recompute: list[str] | None = None
+    inherit_from: str | None = None
 
     allow_nans: bool | list[str] | None = Field(
         default=None,

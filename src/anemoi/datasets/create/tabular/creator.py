@@ -180,3 +180,9 @@ class TabularCreator(Creator):
         """
         # TODO: implement if needed to recompute statistics
         raise NotImplementedError("Statistics are computed during finalisation for tabular datasets.")
+
+    def compute_and_store_partial_statistics(self, dataset: Dataset, variables: list[str]) -> None:
+        raise NotImplementedError("Partial statistics recompute is not supported for tabular datasets.")
+
+    def inherit_and_compute_statistics(self, dataset: Dataset, inherit_from: str, recompute_variables: list[str]) -> None:
+        raise NotImplementedError("Statistics inheritance is not supported for tabular datasets.")

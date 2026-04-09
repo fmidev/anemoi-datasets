@@ -26,6 +26,7 @@ from anemoi.datasets.buffering import WriteBehindBuffer
 
 from ..creator import Creator
 from ..dataset import Dataset
+from ..statistics import STATISTICS
 from ..statistics import StatisticsCollector
 from .context import GriddedContext
 
@@ -322,3 +323,128 @@ class GriddedCreator(Creator):
         LOG.info("Computing statistics for the full dataset")
         collector = self._compute_partial_statistics(dataset, 0, len(dataset.dates))
         collector.add_to_dataset(dataset)
+
+    def compute_and_store_partial_statistics(self, dataset: Dataset, variables: list[str]) -> None:
+        all_vars = self.variables_names
+
+        unknown = [v for v in variables if v not in all_vars]
+        if unknown:
+            raise ValueError(f"Variables not found in dataset: {unknown}. Available: {all_vars}")
+
+        variable_indices = [all_vars.index(v) for v in variables]
+
+        LOG.info(f"Computing partial statistics for variables: {variables}")
+
+        dates = dataset.dates
+        collector = StatisticsCollector(
+            variables_names=variables,
+            filter=self.recipe.statistics.statistics_filter(dates),
+            tendencies=self._tendencies_to_compute(dataset),
+        )
+
+        data = ReadAheadBuffer(dataset.data, start=0)
+        step = data.chunks[0]
+
+        for i in tqdm.tqdm(range(0, len(dates), step), desc="Partial statistics"):
+            end = min(i + step, data.shape[0])
+            chunk = data[i:end]
+            collector.collect(chunk[:, variable_indices], dates[i:end])
+
+        collector.patch_dataset(dataset, variable_indices)
+
+    def inherit_and_compute_statistics(self, dataset: Dataset, inherit_from: str, recompute_variables: list[str]) -> None:
+        output_vars = self.variables_names
+        recompute_set = set(recompute_variables)
+
+        unknown = [v for v in recompute_variables if v not in output_vars]
+        if unknown:
+            raise ValueError(f"Variables in statistics.recompute not found in dataset: {unknown}. Available: {output_vars}")
+
+        source_store = zarr.open(inherit_from, mode="r")
+        source_vars = list(source_store.attrs.get("variables", []))
+        source_var_to_idx = {v: i for i, v in enumerate(source_vars)}
+
+        inherit_vars = [v for v in output_vars if v in source_var_to_idx and v not in recompute_set]
+        compute_vars = [v for v in output_vars if v not in source_var_to_idx or v in recompute_set]
+
+        LOG.info(f"Inheriting statistics for {len(inherit_vars)} variables from {inherit_from}")
+        if compute_vars:
+            LOG.info(f"Computing statistics for {len(compute_vars)} variables: {compute_vars}")
+
+        n_vars = len(output_vars)
+        output_var_to_idx = {v: i for i, v in enumerate(output_vars)}
+
+        # Discover stat array names in source (basic + tendency)
+        source_stat_names = [
+            name for name in source_store.keys()
+            if name in STATISTICS or name.startswith("statistics_tendencies_")
+        ]
+
+        missing_basic = [name for name in STATISTICS if name not in source_stat_names]
+        if missing_basic:
+            LOG.warning(f"Source dataset is missing basic stat arrays: {missing_basic}. These will be NaN for inherited variables.")
+
+        # Build output stat arrays: start with NaN, fill inherited values from source
+        output_stats = {}
+        for stat_name in source_stat_names:
+            arr = np.full(n_vars, np.nan, dtype=np.float64)
+            source_data = source_store[stat_name][:]
+            for var in inherit_vars:
+                src_idx = source_var_to_idx[var]
+                if src_idx < len(source_data):
+                    arr[output_var_to_idx[var]] = source_data[src_idx]
+            output_stats[stat_name] = arr
+
+        # Compute fresh stats for compute_vars and merge into output_stats
+        dates = dataset.dates
+        stat_filter = self.recipe.statistics.statistics_filter(dates)
+        computed_collector = None
+
+        if compute_vars:
+            compute_indices = [output_var_to_idx[v] for v in compute_vars]
+            computed_collector = StatisticsCollector(
+                variables_names=compute_vars,
+                filter=stat_filter,
+                tendencies=self._tendencies_to_compute(dataset),
+            )
+
+            data = ReadAheadBuffer(dataset.data, start=0)
+            step = data.chunks[0]
+
+            for i in tqdm.tqdm(range(0, len(dates), step), desc="Computing statistics"):
+                end = min(i + step, data.shape[0])
+                chunk = data[i:end]
+                computed_collector.collect(chunk[:, compute_indices], dates[i:end])
+
+            computed = computed_collector.statistics()
+            for stat_name, stat_data in computed.items():
+                if stat_name not in output_stats:
+                    output_stats[stat_name] = np.full(n_vars, np.nan, dtype=np.float64)
+                for local_i, out_idx in enumerate(compute_indices):
+                    output_stats[stat_name][out_idx] = stat_data[local_i]
+
+        # Write all stats to output dataset
+        for stat_name, data in output_stats.items():
+            dataset.add_array(name=stat_name, data=data, dimensions=("variable",), overwrite=True)
+
+        # constant_fields: merge inherited and computed
+        source_constants = set(source_store.attrs.get("constant_fields", []))
+        inherited_constants = {v for v in inherit_vars if v in source_constants}
+        computed_constants = set(computed_collector.constant_variables()) if computed_collector else set()
+        all_constants = inherited_constants | computed_constants
+
+        variables_metadata = dataset.get_metadata("variables_metadata", {}).copy()
+        for k in all_constants:
+            if k in variables_metadata:
+                variables_metadata[k]["constant_in_time"] = True
+
+        dataset.update_metadata(
+            constant_fields=sorted(all_constants),
+            variables_metadata=variables_metadata,
+        )
+
+        if hasattr(stat_filter, "statistics_start_date"):
+            dataset.update_metadata(statistics_start_date=stat_filter.statistics_start_date)
+        if hasattr(stat_filter, "statistics_end_date"):
+            dataset.update_metadata(statistics_end_date=stat_filter.statistics_end_date)
+

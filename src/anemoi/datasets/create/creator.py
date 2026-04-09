@@ -319,16 +319,36 @@ class Creator(ABC):
         LOG.info("Running statistics computation.")
         dataset = Dataset(self.path, update=True)
         recompute_statistics = self.kwargs.get("recompute_statistics", False)
+        recompute_variables = self.recipe.statistics.recompute
 
-        if all(name in dataset.store for name in ("mean", "minimum", "maximum", "stdev")) and not recompute_statistics:
-            LOG.info("Statistics already present, skipping computation.")
+        inherit_from = self.recipe.statistics.inherit_from
+        stats_exist = all(name in dataset.store for name in ("mean", "minimum", "maximum", "stdev"))
+
+        if stats_exist and not recompute_statistics:
+            if recompute_variables:
+                LOG.info(f"Recomputing statistics for {len(recompute_variables)} variables: {recompute_variables}")
+                self.compute_and_store_partial_statistics(dataset, recompute_variables)
+                dataset.touch()
+            else:
+                LOG.info("Statistics already present, skipping computation.")
             return
 
-        self.compute_and_store_statistics(dataset)
+        if inherit_from and not recompute_statistics:
+            self.inherit_and_compute_statistics(dataset, inherit_from, recompute_variables or [])
+        else:
+            self.compute_and_store_statistics(dataset)
         dataset.touch()
 
     @abstractmethod
     def compute_and_store_statistics(self, dataset: Dataset) -> None:
+        pass
+
+    @abstractmethod
+    def compute_and_store_partial_statistics(self, dataset: Dataset, variables: list[str]) -> None:
+        pass
+
+    @abstractmethod
+    def inherit_and_compute_statistics(self, dataset: Dataset, inherit_from: str, recompute_variables: list[str]) -> None:
         pass
 
     ########################

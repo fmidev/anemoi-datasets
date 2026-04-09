@@ -670,6 +670,42 @@ class StatisticsCollector:
         if hasattr(self._filter, "statistics_end_date"):
             dataset.update_metadata(statistics_end_date=self._filter.statistics_end_date)
 
+    def patch_dataset(self, dataset: Any, variable_indices: list[int]) -> None:
+        """Patch statistics for a subset of variables in an existing dataset.
+
+        Reads existing statistics arrays, updates only the entries at variable_indices
+        with freshly computed values, and writes back. Other variables are unchanged.
+
+        Parameters
+        ----------
+        dataset : Any
+            The dataset object whose statistics will be patched.
+        variable_indices : list[int]
+            Indices into the full variable list corresponding to the variables
+            this collector was built for.
+        """
+        stats = self.statistics()
+        for stat_name, new_data in stats.items():
+            assert new_data.dtype == np.float64, f"Expected float64 {stat_name}, got {new_data.dtype}"
+            existing = dataset.store[stat_name][:]
+            existing[variable_indices] = new_data
+            dataset.store[stat_name][:] = existing
+
+        recomputed_constants = set(self.constant_variables())
+        existing_constants = set(dataset.get_metadata("constant_fields", []))
+        recomputed_var_names = set(self._variables_names)
+        updated_constants = (existing_constants - recomputed_var_names) | recomputed_constants
+
+        variables_metadata = dataset.get_metadata("variables_metadata", {}).copy()
+        for var in self._variables_names:
+            if var in variables_metadata:
+                variables_metadata[var]["constant_in_time"] = var in recomputed_constants
+
+        dataset.update_metadata(
+            constant_fields=sorted(updated_constants),
+            variables_metadata=variables_metadata,
+        )
+
     def adjust_partial_statistics(self, dataset, state) -> None:
         """Adjust statistics for a specific group and data range.
 
