@@ -209,14 +209,31 @@ class Concat(ConcatMixin, Combined):
             List of compatible datasets.
         """
         # Study the dates
-        ranges = [(d.dates[0].astype(object), d.dates[-1].astype(object)) for d in datasets]
+        ranges = []
+        for d in datasets:
+            if len(d.dates) == 1:
+                ranges.append((d.dates[0].astype(object),))
+            else:
+                ranges.append((d.dates[0].astype(object), d.dates[-1].astype(object)))
+
+
+        # Make sure the dates are disjoint
+        if len(ranges) == 2:
+            if ranges[0] >= ranges[1]:
+                raise ValueError(f"Overlapping dates: {ranges[0]} and {ranges[1]}")
+
+            return datasets
 
         # Make sure the dates are disjoint
         for i in range(len(ranges)):
             r = ranges[i]
             for j in range(i + 1, len(ranges)):
                 s = ranges[j]
-                if r[0] <= s[0] <= r[1] or r[0] <= s[1] <= r[1]:
+
+                if len(r) == 1 and len(s) == 1:
+                    if r[0] == s[0]:
+                        raise ValueError(f"Overlapping dates: {r} and {s} ({datasets[i]} {datasets[j]})")
+                elif r[0] <= s[0] <= r[1] or r[0] <= s[1] <= r[1]:
                     raise ValueError(f"Overlapping dates: {r} and {s} ({datasets[i]} {datasets[j]})")
 
         # For now we should have the datasets in order with no gaps
@@ -228,7 +245,7 @@ class Concat(ConcatMixin, Combined):
             result.append(datasets[i])
             r = ranges[i]
             s = ranges[i + 1]
-            if r[1] + frequency != s[0]:
+            if len(r) > 1 and r[1] + frequency != s[0]:
                 if fill_missing_gaps:
                     from anemoi.datasets.usage.gridded.missing import MissingDataset
 
