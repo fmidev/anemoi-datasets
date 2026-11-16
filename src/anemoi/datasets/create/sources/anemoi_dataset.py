@@ -15,6 +15,49 @@ from .legacy import LegacySource
 
 @source_registry.register("anemoi_dataset")
 class AnemoiDatasetSource(LegacySource):
+    def execute_forecast_dates(self, dates):
+        """Read by valid time and attach the caller's base date and forecast step.
+
+        The input must already contain the intended forecast for each valid
+        time: a flat dataset cannot distinguish overlapping model runs.
+        """
+        from anemoi.transform.fields import new_field_with_metadata
+        from anemoi.transform.fields import new_fieldlist_from_list
+
+        requests = []
+        for valid_time, basetime in dates:
+            hours = (valid_time - basetime).total_seconds() / 3600
+            if hours < 0 or not hours.is_integer():
+                raise ValueError("anemoi_dataset trajectories require non-negative, whole-hour forecast steps")
+            requests.append((valid_time, basetime, int(hours)))
+
+        if not requests:
+            return new_fieldlist_from_list([])
+
+        # Read each snapshot once, even when requested for multiple base dates.
+        valid_times = list(dict.fromkeys(vt for vt, _bt, _step in requests))
+        fields = self._execute(self.context, valid_times, *self.args, **self.kwargs)
+        by_valid_time = {}
+        for field in fields:
+            key = np.datetime64(field.metadata("valid_datetime"), "us")
+            by_valid_time.setdefault(key, []).append(field)
+
+        result = []
+        for valid_time, basetime, step in requests:
+            key = np.datetime64(valid_time, "us")
+            if key not in by_valid_time:
+                raise ValueError(f"No fields in anemoi_dataset for requested valid time {valid_time.isoformat()}")
+            for field in by_valid_time[key]:
+                result.append(
+                    new_field_with_metadata(
+                        field,
+                        date=int(basetime.strftime("%Y%m%d")),
+                        time=int(basetime.strftime("%H%M")),
+                        step=step,
+                    )
+                )
+        return new_fieldlist_from_list(result)
+
     @staticmethod
     def _execute(context, dates, params=None, **kwargs):
         import earthkit.data as ekd
@@ -65,8 +108,6 @@ class AnemoiDatasetSource(LegacySource):
                     metadata["values"] = e
 
                     results.append(metadata.copy())
-
-        print(results[0].keys())
 
         # "list-of-dicts" does support resolution
         results = ekd.from_source("list-of-dicts", results)

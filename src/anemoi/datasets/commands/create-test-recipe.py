@@ -238,10 +238,12 @@ def walk(
                         if isinstance(levels, list) and len(levels) > n_levels:
                             node[key] = levels[:n_levels]
 
-        for value in node.values():
+        for key, value in node.items():
             walk(
                 value,
-                reduce_dates=reduce_dates,
+                # Forecast steps are durations, not calendar dates, even when
+                # their block also contains start/end/frequency keys.
+                reduce_dates=reduce_dates and key != "steps",
                 reduce_grid=reduce_grid,
                 reduce_levels=reduce_levels,
                 include_last_dates=include_last_dates,

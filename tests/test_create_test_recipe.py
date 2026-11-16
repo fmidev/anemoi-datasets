@@ -79,6 +79,44 @@ def test_create_test_recipe_includes_last_dates(recipe_path: Path, tmp_path: Pat
     ]
 
 
+@pytest.mark.parametrize("first_step,last_step", [(18, 35), ("18h", "35h")])
+def test_create_test_recipe_preserves_forecast_steps(first_step, last_step, tmp_path: Path, capsys) -> None:
+    input_path = tmp_path / "trajectories.yaml"
+    output_path = tmp_path / "trajectories-test.yaml"
+    steps = {"start": first_step, "end": last_step, "frequency": "1h"}
+    input_path.write_text(
+        yaml.safe_dump(
+            {
+                "base_dates": {
+                    "start": "2020-02-06T00:00:00",
+                    "end": "2020-02-08T06:00:00",
+                    "frequency": "18h",
+                    "missing": ["2020-02-06T18:00:00"],
+                },
+                "steps": steps,
+                "input": {"anemoi_dataset": {"dataset": "input.zarr"}},
+                "output": {"layout": "trajectories"},
+            },
+            sort_keys=False,
+        )
+    )
+
+    cli_main(
+        __version__,
+        "anemoi-datasets",
+        COMMANDS,
+        ["create-test-recipe", str(input_path), str(output_path), "--n-dates", "1"],
+    )
+
+    data = yaml.safe_load(output_path.read_text())
+    assert data["steps"] == steps
+    assert data["base_dates"]["missing"] == [{"start": "2020-02-06T18:00:00", "end": "2020-02-07T12:00:00"}]
+    recipe = Recipe(**data)
+    retained = [value for value in recipe.base_dates.values if value not in recipe.base_dates.missing]
+    assert retained == [datetime(2020, 2, 6), datetime(2020, 2, 8, 6)]
+    assert "Could not reduce dates block" not in capsys.readouterr().out
+
+
 def test_recipe_supports_missing_ranges() -> None:
     recipe = Recipe(
         dates={

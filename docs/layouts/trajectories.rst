@@ -79,6 +79,10 @@ can be used at the leaves of a trajectory recipe. Today this means:
    support.
 -  :ref:`accumulate <sources-accumulate>` — forecast accumulations via
    the ``accumulation: from-zero | from-previous-step`` flag; see below.
+-  :ref:`anemoi_dataset <anemoi-dataset_source>` — valid-time lookup from
+   an existing gridded dataset, annotated with the requested base date
+   and step. The run boundaries and lead times must be supplied by the
+   recipe; they cannot be inferred from the source date axis.
 
 ``grib-index``, ``fdb``, ``hindcasts`` and ``recentre`` are not
 trajectory-aware in this release. ``from-trajectories:`` is the reverse
